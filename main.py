@@ -107,16 +107,16 @@ class TextProcess:
 TextProcess.create_charmaps()
 
 
-class SRDataset(ta.datasets.LIBRISPEECH):
+class SpeechDataset(ta.datasets.LIBRISPEECH):
 
     def __init__(self, *args, **kwargs):
-        super(SRDataset, self).__init__(*args, **kwargs)
+        super(SpeechDataset, self).__init__(*args, **kwargs)
 
     def __getitem__(self, i):
-        audio, sr, label, *_ = super(SRDataset, self).__getitem__(i)
+        audio, sr, label, *_ = super(SpeechDataset, self).__getitem__(i)
         return process(audio, sr), label  
 
-    def process(self, audio, sr):
+    def process(self, audio, sr, augment=True):
         audio = AudioProcess.resample(audio, sr, SR)
         audio = AudioProcess.to_stereo(audio)
         audio = AudioProcess.resize(audio, SR, DURATION)
@@ -126,6 +126,6 @@ class SRDataset(ta.datasets.LIBRISPEECH):
 SR = 16000
 DURATION = 12000
 CHANNELS = 2
-TRAIN_SET = SRDataset("train-set", "train-clean-100", download=True)
-TEST_SET = SRDataset("test-set", "test-clean", download=True)
+TRAIN_SET = SpeechDataset("train-set", "train-clean-100", download=True)
+TEST_SET = SpeechDataset("test-set", "test-clean", download=True)
 print(TRAIN_SET[0])
