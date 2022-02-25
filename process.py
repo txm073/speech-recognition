@@ -5,8 +5,6 @@ import numpy as np
 from tqdm import tqdm
 
 import torch 
-from torch import nn, optim
-import torch.nn.functional as func
 from torch.utils.data import Dataset, DataLoader
 import torchaudio as ta
 
@@ -32,10 +30,12 @@ class AudioProcess:
 
     @staticmethod
     def resample(audio, old_sr, new_sr):
+        if old_sr == new_sr:
+            return audio
         channels = audio.shape[0]
-        new_signal = torchaudio.transforms.Resample(old_sr, new_sr)(audio[:1, :])
+        new_signal = ta.transforms.Resample(old_sr, new_sr)(audio[:1, :])
         if channels == 2:
-            second_channel = torchaudio.transforms.Resample(old_sr, new_sr)(audio[1:, :])
+            second_channel = ta.transforms.Resample(old_sr, new_sr)(audio[1:, :])
             new_signal = torch.cat((new_signal, second_channel))
         return new_signal
 
@@ -67,23 +67,23 @@ class AudioProcess:
     @staticmethod
     def spectrogram(audio, sr, n_mels=64, n_fft=1024, hop_len=None):
         top_db = 80
-        spec = transforms.MelSpectrogram(sr, n_fft=n_fft, hop_length=hop_len, n_mels=n_mels)(audio)
-        spec = transforms.AmplitudeToDB(top_db=top_db)(spec)
+        spec = ta.transforms.MelSpectrogram(sr, n_fft=n_fft, hop_length=hop_len, n_mels=n_mels)(audio)
+        spec = ta.transforms.AmplitudeToDB(top_db=top_db)(spec)
         return spec
 
     @staticmethod
-    def spec_augment(spec, max_mask_pct=0.1, n_freq_masks=1, n_time_masks=1):
+    def specaugment(spec, max_mask_pct=0.1, n_freq_masks=1, n_time_masks=1):
         _, n_mels, n_steps = spec.shape
         mask_value = spec.mean()
         aug_spec = spec
 
         freq_mask_param = max_mask_pct * n_mels
         for i in range(n_freq_masks):
-            aug_spec = transforms.FrequencyMasking(freq_mask_param)(aug_spec, mask_value)
+            aug_spec = ta.transforms.FrequencyMasking(freq_mask_param)(aug_spec, mask_value)
 
         time_mask_param = max_mask_pct * n_steps
         for i in range(n_time_masks):
-            aug_spec = transforms.TimeMasking(time_mask_param)(aug_spec, mask_value)
+            aug_spec = ta.transforms.TimeMasking(time_mask_param)(aug_spec, mask_value)
         return aug_spec
 
 
@@ -114,18 +114,34 @@ class SpeechDataset(ta.datasets.LIBRISPEECH):
 
     def __getitem__(self, i):
         audio, sr, label, *_ = super(SpeechDataset, self).__getitem__(i)
-        return process(audio, sr), label  
+        return *self.process(audio, sr), label  
 
     def process(self, audio, sr, augment=True):
         audio = AudioProcess.resample(audio, sr, SR)
         audio = AudioProcess.to_stereo(audio)
         audio = AudioProcess.resize(audio, SR, DURATION)
-        return audio, sr
+        if augment:
+            audio = AudioProcess.time_shift(audio, 0.2)
+        spec = AudioProcess.spectrogram(audio, sr)
+        if augment:
+            spec = AudioProcess.specaugment(spec)
+        return spec, sr
 
 
 SR = 16000
-DURATION = 12000
+DURATION = 14000
 CHANNELS = 2
+EPOCHS = 5
+BATCH_SIZE = 16
 TRAIN_SET = SpeechDataset("train-set", "train-clean-100", download=True)
 TEST_SET = SpeechDataset("test-set", "test-clean", download=True)
-print(TRAIN_SET[0])
+TRAIN_LOADER = DataLoader(TRAIN_SET, batch_size=BATCH_SIZE, shuffle=True)
+TEST_LOADER = DataLoader(TEST_SET, batch_size=BATCH_SIZE, shuffle=True)
+
+from model import ResidualBlock, conv
+
+res = ResidualBlock(32, 32)
+for i, (batch, sr, labels) in enumerate(TRAIN_LOADER):
+    output = res(conv(batch))
+    print(output)
+    break
