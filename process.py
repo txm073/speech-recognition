@@ -5,8 +5,11 @@ import numpy as np
 from tqdm import tqdm
 
 import torch 
+from torch import nn, optim, autograd
 from torch.utils.data import Dataset, DataLoader
 import torchaudio as ta
+
+from neuralnet import ASRModel
 
 warnings.simplefilter("ignore")
 
@@ -91,17 +94,30 @@ class TextProcess:
     
     @classmethod
     def create_charmaps(cls):
-        chars = "' abcdefghijklmnopqrstuvwxyz"
-        cls.int2char = {i: c for i, c in enumerate(chars)}
-        cls.char2int = {c: i for i, c in enumerate(chars)}
+        cls.chars = "' abcdefghijklmnopqrstuvwxyz0-"
+        cls.int2char = {i: c for i, c in enumerate(cls.chars)}
+        cls.char2int = {c: i for i, c in enumerate(cls.chars)}
 
     @classmethod
     def text2int(cls, text):
-        return [cls.char2int[char] for char in text.lower().strip()]
+        return [cls.char2int[char] for char in text.lower()]
 
     @classmethod
     def int2text(cls, arr):
         return "".join([cls.int2char[i] for i in arr])
+
+    @classmethod
+    def resize(cls, arr, length):
+        if len(arr) > length:
+            return arr[:length]
+        else:
+            for i in range(length - len(arr)):
+                arr.append(hparams["padding_char"])
+            return arr
+
+    @classmethod
+    def unpad(cls, arr):
+        return [n.item() for n in arr if n != hparams["padding_char"]]
 
 
 TextProcess.create_charmaps()
@@ -113,35 +129,67 @@ class SpeechDataset(ta.datasets.LIBRISPEECH):
         super(SpeechDataset, self).__init__(*args, **kwargs)
 
     def __getitem__(self, i):
-        audio, sr, label, *_ = super(SpeechDataset, self).__getitem__(i)
-        return *self.process(audio, sr), label  
+        return super(SpeechDataset, self).__init__(i)
 
-    def process(self, audio, sr, augment=True):
-        audio = AudioProcess.resample(audio, sr, SR)
-        audio = AudioProcess.to_stereo(audio)
-        audio = AudioProcess.resize(audio, SR, DURATION)
-        if augment:
-            audio = AudioProcess.time_shift(audio, 0.2)
-        spec = AudioProcess.spectrogram(audio, sr)
-        if augment:
+    def data_processing(self, batch, data_type="train"):
+        spectrograms = []
+        labels = []
+        input_lengths = []
+        label_lengths = []
+        for (audio, sr, utterance, *_) in batch:
+            spec = AudioProcess.spectrogram(audio, sr)
             spec = AudioProcess.specaugment(spec)
-        return spec, sr
+            
+            spectrograms.append(spec)
+            label = torch.Tensor(TextProcess.text2int(utterance.lower()))
+            labels.append(label)
+            input_lengths.append(spec.shape[0] // 2)
+            label_lengths.append(len(label))
+        spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1).transpose(2, 3)
+        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
+
+        return spectrograms, labels, input_lengths, label_lengths
 
 
-SR = 16000
-DURATION = 14000
-CHANNELS = 2
-EPOCHS = 5
-BATCH_SIZE = 16
-TRAIN_SET = SpeechDataset("train-set", "train-clean-100", download=True)
-TEST_SET = SpeechDataset("test-set", "test-clean", download=True)
-TRAIN_LOADER = DataLoader(TRAIN_SET, batch_size=BATCH_SIZE, shuffle=True)
-TEST_LOADER = DataLoader(TEST_SET, batch_size=BATCH_SIZE, shuffle=True)
 
-from model import ResidualLayer, conv
+class CTCDecoder:
+    pass
 
-res = ResidualLayer(32, 32)
-for i, (batch, sr, labels) in enumerate(TRAIN_LOADER):
-    output = res(torch.randn(1, 32, 4, 23))
-    print(output)
+
+hparams = {
+    "epochs": 5, # Loop over the dataset
+    "batch_size": 16, # Size of batches of data inputted
+    "audio_duration": 14000, # Duration of the processed audio in milliseconds
+    "sample_rate": 16000, # Sample rate of the processed audio data
+    "padding_char": 28, # Special character for padding labels
+    "blank_char": 29, # Special character to denote silence in the audio
+    "label_length": 256, # Length of labels in characters
+    "n_conv_layers": 3, # Number of residual convolutional layers
+    "n_recurrent_layers": 3, # Number of bidirectional GRU layers
+    "dropout": 0.1, # Proportion of neurons to randomly disable each pass
+    "hidden_channels": 32, # Number of filters in the hidden layer of the conv layers
+    "rnn_dim": 256, # Predict 1 character for each timestep
+    "kernel_size": 3, # Size of the window performing convolutions
+    "stride": 2, # Stride of the convolutional window
+    "conv_padding": 1, # Padding around the kernel
+    "output_classes": len(TextProcess.chars), # Number of output classes for the model
+    "learning_rate": 0.001 # Rate of descent when updating weights
+}
+
+train_set = SpeechDataset("train-set", "train-clean-100", download=True)
+test_set = SpeechDataset("test-set", "test-clean", download=True)
+train_loader = DataLoader(train_set, batch_size=hparams["batch_size"], shuffle=True)
+test_loader = DataLoader(test_set, batch_size=hparams["batch_size"], shuffle=True)
+
+model = ASRModel(**hparams)
+ctc_loss = nn.CTCLoss(blank=hparams["blank_char"])
+optimiser = optim.Adam(model.parameters(), lr=hparams["learning_rate"])
+
+for i, (batch, labels) in enumerate((train_loader)):
+    output = model(batch)
+    
+    labels = [TextProcess.unpad(label) for label in labels]
+    label_lengths = tuple([len(label) for label in labels])
+    
+    loss = ctc_loss(output, labels, lengths, lengths)
     break
