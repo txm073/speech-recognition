@@ -1,25 +1,35 @@
+import torch
 from torch import nn
 from torch.nn import functional as func
 
 
-class ResidualBlock(nn.Module):
+class ResidualLayer(nn.Module):
+    
+    def __init__(self, in_channels, out_channels, expansion=1, downsampling=1, *args, **kwargs):
+        super(ResidualLayer, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.expansion = expansion
+        self.expanded_channels = self.out_channels * self.expansion
+        self.downsampling = downsampling
+        self.identity = nn.Identity()
 
-    def __init__(self, in_channels, out_channels, dropout=0.1, kernel=3, stride=3, padding=1):
-        super(ResidualBlock, self).__init__()
-        self.residual_layer = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel, stride, padding),
-            nn.BatchNorm2d(out_channels), 
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(dropout, inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel, stride, padding),
-            nn.BatchNorm2d(out_channels), 
-            nn.ReLU(inplace=True),
-            nn.Dropout2d(dropout, inplace=True)
-        )
-        self.shortcut = nn.Linear(146, 17)
+        self.shortcut = nn.Sequential(
+            nn.Conv2d(self.in_channels, self.expanded_channels, kernel_size=1,
+                      stride=self.downsampling, bias=False),
+            nn.BatchNorm2d(self.expanded_channels)) if self.should_apply_shortcut() else None
+        
+    def should_apply_shortcut(self):
+        return self.in_channels != self.expanded_channels
 
     def forward(self, x):
-        return self.shortcut(x) + self.residual_layer(x)
+        residual = x
+        if self.should_apply_shortcut():
+            residual = self.shortcut(x)
+        x = self.identity(x)
+        x += residual
+        x = func.relu(x)
+        return x
 
 
 class RecurrentLayer(nn.Module):
@@ -38,12 +48,6 @@ class RecurrentLayer(nn.Module):
         x, _ = self.gru(x)
         x = self.dropout(x)
         return x
-
-
-class AcousticModel(nn.Module):
-    
-    def __init__(self, ):
-        super(AcousticModel, self).__init__()
 
 
 """

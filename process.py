@@ -138,10 +138,10 @@ TEST_SET = SpeechDataset("test-set", "test-clean", download=True)
 TRAIN_LOADER = DataLoader(TRAIN_SET, batch_size=BATCH_SIZE, shuffle=True)
 TEST_LOADER = DataLoader(TEST_SET, batch_size=BATCH_SIZE, shuffle=True)
 
-from model import ResidualBlock, conv
+from model import ResidualLayer, conv
 
-res = ResidualBlock(32, 32)
+res = ResidualLayer(32, 32)
 for i, (batch, sr, labels) in enumerate(TRAIN_LOADER):
-    output = res(conv(batch))
+    output = res(torch.randn(1, 32, 4, 23))
     print(output)
     break
