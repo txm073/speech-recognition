@@ -94,9 +94,9 @@ class TextProcess:
     
     @classmethod
     def create_charmaps(cls):
-        cls.chars = "' abcdefghijklmnopqrstuvwxyz0-"
-        cls.int2char = {i: c for i, c in enumerate(cls.chars)}
-        cls.char2int = {c: i for i, c in enumerate(cls.chars)}
+        cls.chars = "' abcdefghijklmnopqrstuvwxyz0"
+        cls.int2char = {i: c for i, c in enumerate(cls.chars, 1)}
+        cls.char2int = {c: i for i, c in enumerate(cls.chars, 1)}
 
     @classmethod
     def text2int(cls, text):
@@ -129,27 +129,16 @@ class SpeechDataset(ta.datasets.LIBRISPEECH):
         super(SpeechDataset, self).__init__(*args, **kwargs)
 
     def __getitem__(self, i):
-        return super(SpeechDataset, self).__init__(i)
-
-    def data_processing(self, batch, data_type="train"):
-        spectrograms = []
-        labels = []
-        input_lengths = []
-        label_lengths = []
-        for (audio, sr, utterance, *_) in batch:
-            spec = AudioProcess.spectrogram(audio, sr)
-            spec = AudioProcess.specaugment(spec)
-            
-            spectrograms.append(spec)
-            label = torch.Tensor(TextProcess.text2int(utterance.lower()))
-            labels.append(label)
-            input_lengths.append(spec.shape[0] // 2)
-            label_lengths.append(len(label))
-        spectrograms = nn.utils.rnn.pad_sequence(spectrograms, batch_first=True).unsqueeze(1).transpose(2, 3)
-        labels = nn.utils.rnn.pad_sequence(labels, batch_first=True)
-
-        return spectrograms, labels, input_lengths, label_lengths
-
+        item = super(SpeechDataset, self).__getitem__(i)
+        audio, sr, text, *_ = item
+        audio = AudioProcess.to_stereo(audio)
+        audio = AudioProcess.resample(audio, sr, hparams["sample_rate"])
+        audio = AudioProcess.resize(audio, hparams["sample_rate"], hparams["audio_duration"])
+        spec = AudioProcess.spectrogram(audio, sr)
+        spec = AudioProcess.specaugment(spec)
+        label = TextProcess.text2int(text)
+        label = TextProcess.resize(label, hparams["label_length"])
+        return spec, torch.Tensor(label)
 
 
 class CTCDecoder:
@@ -161,8 +150,8 @@ hparams = {
     "batch_size": 16, # Size of batches of data inputted
     "audio_duration": 14000, # Duration of the processed audio in milliseconds
     "sample_rate": 16000, # Sample rate of the processed audio data
-    "padding_char": 28, # Special character for padding labels
-    "blank_char": 29, # Special character to denote silence in the audio
+    "padding_char": 29, # Special character for padding labels
+    "blank_char": 0, # Special character to denote silence in the audio
     "label_length": 256, # Length of labels in characters
     "n_conv_layers": 3, # Number of residual convolutional layers
     "n_recurrent_layers": 3, # Number of bidirectional GRU layers
@@ -182,14 +171,16 @@ train_loader = DataLoader(train_set, batch_size=hparams["batch_size"], shuffle=T
 test_loader = DataLoader(test_set, batch_size=hparams["batch_size"], shuffle=True)
 
 model = ASRModel(**hparams)
-ctc_loss = nn.CTCLoss(blank=hparams["blank_char"])
+loss_fn = nn.CrossEntropyLoss()
 optimiser = optim.Adam(model.parameters(), lr=hparams["learning_rate"])
 
 for i, (batch, labels) in enumerate((train_loader)):
-    output = model(batch)
-    
-    labels = [TextProcess.unpad(label) for label in labels]
-    label_lengths = tuple([len(label) for label in labels])
-    
-    loss = ctc_loss(output, labels, lengths, lengths)
+    outputs = model(batch)
+    ctc_data = (
+        outputs, 
+        labels,  
+        torch.Tensor([len(output) for output in outputs]).to(torch.int32), 
+        torch.Tensor([len(TextProcess.unpad(label)) for label in labels]).to(torch.int32)
+    )
+    print(outputs[0][255].shape)
     break
