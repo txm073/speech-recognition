@@ -1,3 +1,4 @@
 /train-set/*
 /test-set/*
 /spectrograms/*
+/deepspeech/*
